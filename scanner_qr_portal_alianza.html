@@ -36,7 +36,7 @@
     .soft{background:#fff;border:1px solid var(--border);color:#445168}
     .result{margin-top:12px;border:1px solid var(--border);border-radius:14px;padding:12px;background:#fbfcff;display:none}
     .result.show{display:block}
-    .result strong{display:block;font-size:13px;margin-bottom:6px}
+    .result strong{display:block;font-size:13px;margin-bottom:6px}.result.success{border-color:#b7e4c7;background:#f0fff5}.result.error{border-color:#f5c2c7;background:#fff5f5}.result.success code{color:#157347;background:#e8f7ef}.result.error code{color:#b02a37;background:#fdebee}
     .result code{display:block;word-break:break-all;font-size:12px;color:#0D47A1;background:#eef4ff;padding:8px;border-radius:8px}
     .hint{margin-top:10px;font-size:11px;color:var(--muted);line-height:1.5}
   </style>
@@ -60,12 +60,12 @@
     </div>
 
     <div id="result" class="result">
-      <strong>Último QR detectado</strong>
+      <strong id="resultTitle">Último QR detectado</strong>
       <code id="resultText"></code>
     </div>
 
     <div class="hint">
-      La cámara se usa únicamente en esta página HTTPS. El QR se envía al Portal Alianza para su validación; este escáner no consulta Firestore ni expedientes.
+      La cámara se usa únicamente en esta página HTTPS. Cada QR detectado se envía al Portal Alianza para su validación y, si es válido, el escáner continúa automáticamente con el siguiente.
     </div>
   </main>
 
@@ -75,6 +75,7 @@
 const statusEl = document.getElementById('status');
 const resultEl = document.getElementById('result');
 const resultTextEl = document.getElementById('resultText');
+const resultTitleEl = document.getElementById('resultTitle');
 const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
 
@@ -108,6 +109,24 @@ window.addEventListener('message', function(event){
 
   if(d.type === 'AJO_QR_RESUME'){
     reanudarEscaneo();
+    return;
+  }
+
+  if(d.type === 'AJO_QR_RESULT'){
+    const ok = !!d.success;
+    resultEl.classList.add('show');
+    resultEl.classList.toggle('success', ok);
+    resultEl.classList.toggle('error', !ok);
+    resultTitleEl.textContent = ok
+      ? ('✓ ' + (d.modo || 'Registro') + ' registrada' + (d.titular ? ' · ' + d.titular : ''))
+      : '✕ QR rechazado';
+    resultTextEl.textContent = ok
+      ? ((d.folio || '') + (d.rol ? ' · ' + d.rol : ''))
+      : (d.message || 'No fue posible registrar la asistencia.');
+    setStatus(ok ? 'Registro confirmado · preparando siguiente QR...' : 'QR rechazado · puedes intentar nuevamente.', ok ? 'ok' : 'err');
+    setTimeout(function(){
+      if(ok) reanudarEscaneo();
+    }, ok ? 900 : 700);
     return;
   }
 
@@ -178,12 +197,15 @@ function onQrDetectado(decodedText){
 
   const raw = String(decodedText || '').trim();
 
+  resultTitleEl.textContent = 'QR detectado';
   resultTextEl.textContent = raw;
   resultEl.classList.add('show');
+  resultEl.classList.remove('success','error');
   setStatus('QR detectado · esperando validación...','ok');
 
   sendToParent({
     type:'AJO_QR_DETECTED',
+    qrData:raw,
     raw:raw,
     timestamp:Date.now()
   });
