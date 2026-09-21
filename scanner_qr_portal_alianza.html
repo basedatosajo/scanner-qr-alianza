@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Escáner QR - Portal Alianza</title>
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <style>
+    :root{
+      --primary:#0D47A1;
+      --primary2:#1976D2;
+      --bg:#f5f7fb;
+      --text:#172033;
+      --muted:#6f7b8f;
+      --border:#dfe6f0;
+      --success:#198754;
+      --danger:#dc3545;
+      --shadow:0 18px 45px rgba(13,71,161,.12);
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--text)}
+    body{display:flex;justify-content:center;padding:18px}
+    .card{width:min(560px,100%);background:#fff;border:1px solid var(--border);border-radius:24px;padding:18px;box-shadow:var(--shadow)}
+    .brand{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+    .brand img{width:52px;height:52px;object-fit:contain}
+    .brand strong{display:block;font-size:16px}
+    .brand span{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+    .status{padding:11px 13px;border-radius:12px;background:#f3f6fb;color:#526076;font-size:13px;margin-bottom:12px}
+    .status.ok{background:#e8f7ef;color:#157347}
+    .status.err{background:#fdebee;color:#b02a37}
+    .reader{width:100%;border-radius:18px;overflow:hidden;background:#0d1117;border:1px solid #1e2630;min-height:300px}
+    #reader video{width:100%!important;height:auto!important;display:block}
+    .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+    button{border:0;border-radius:12px;padding:11px 14px;font-weight:700;cursor:pointer}
+    .primary{background:linear-gradient(135deg,var(--primary),var(--primary2));color:#fff}
+    .soft{background:#fff;border:1px solid var(--border);color:#445168}
+    .result{margin-top:12px;border:1px solid var(--border);border-radius:14px;padding:12px;background:#fbfcff;display:none}
+    .result.show{display:block}
+    .result strong{display:block;font-size:13px;margin-bottom:6px}
+    .result code{display:block;word-break:break-all;font-size:12px;color:#0D47A1;background:#eef4ff;padding:8px;border-radius:8px}
+    .hint{margin-top:10px;font-size:11px;color:var(--muted);line-height:1.5}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand">
+      <img src="https://lh3.googleusercontent.com/d/1J6oQPgqHqA8twwhnhuClNdHh8evDHJct" alt="Alianza">
+      <div>
+        <strong>Escáner QR</strong>
+        <span>Portal Alianza - Asistencia</span>
+      </div>
+    </div>
+
+    <div id="status" class="status">Preparando cámara...</div>
+    <div id="reader" class="reader"></div>
+
+    <div class="actions">
+      <button id="startBtn" type="button" class="primary">Activar cámara</button>
+      <button id="stopBtn" type="button" class="soft">Detener</button>
+    </div>
+
+    <div id="result" class="result">
+      <strong>Último QR detectado</strong>
+      <code id="resultText"></code>
+    </div>
+
+    <div class="hint">
+      La cámara se usa únicamente en esta página HTTPS. El QR se envía al Portal Alianza para su validación; este escáner no consulta Firestore ni expedientes.
+    </div>
+  </main>
+
+<script>
+'use strict';
+
+const statusEl = document.getElementById('status');
+const resultEl = document.getElementById('result');
+const resultTextEl = document.getElementById('resultText');
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+
+let scanner = null;
+let running = false;
+let paused = false;
+let parentOrigin = '*';
+
+function setStatus(msg, type){
+  statusEl.textContent = msg;
+  statusEl.className = 'status' + (type ? ' ' + type : '');
+}
+
+function sendToParent(message){
+  if(window.parent && window.parent !== window){
+    try { window.parent.postMessage(message, parentOrigin || '*'); } catch(e) {}
+  }
+  if(window.opener && !window.opener.closed){
+    try { window.opener.postMessage(message, '*'); } catch(e) {}
+  }
+}
+
+window.addEventListener('message', function(event){
+  const d = event && event.data ? event.data : {};
+  if(d.type === 'AJO_SCANNER_INIT'){
+    parentOrigin = event.origin || '*';
+    sendToParent({type:'AJO_SCANNER_READY'});
+    if(d.autoStart) iniciarCamara();
+    return;
+  }
+
+  if(d.type === 'AJO_QR_RESUME'){
+    reanudarEscaneo();
+    return;
+  }
+
+  if(d.type === 'AJO_QR_MODE'){
+    return;
+  }
+});
+
+async function iniciarCamara(){
+  if(running) return;
+
+  if(!window.Html5Qrcode){
+    setStatus('No se cargó el lector QR. Revisa tu conexión a Internet.','err');
+    return;
+  }
+
+  scanner = scanner || new Html5Qrcode('reader', { verbose:false });
+
+  try{
+    setStatus('Solicitando permiso de cámara...');
+    await scanner.start(
+      { facingMode: 'environment' },
+      {
+        fps: 12,
+        qrbox: function(viewfinderWidth, viewfinderHeight){
+          const size = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.72);
+          return { width:size, height:size };
+        },
+        aspectRatio: 1.4
+      },
+      onQrDetectado,
+      function(){}
+    );
+
+    running = true;
+    paused = false;
+    setStatus('Cámara activa · Escaneando...');
+  }catch(err){
+    running = false;
+    paused = false;
+    setStatus(
+      'No fue posible activar la cámara: ' + ((err && err.message) || String(err)),
+      'err'
+    );
+  }
+}
+
+async function detenerCamara(){
+  if(!scanner || !running){
+    setStatus('Cámara detenida.');
+    return;
+  }
+
+  try { await scanner.stop(); } catch(e) {}
+  try { await scanner.clear(); } catch(e) {}
+
+  scanner = null;
+  running = false;
+  paused = false;
+  setStatus('Cámara detenida.');
+}
+
+function onQrDetectado(decodedText){
+  if(paused) return;
+
+  paused = true;
+  try { scanner.pause(true); } catch(e) {}
+
+  const raw = String(decodedText || '').trim();
+
+  resultTextEl.textContent = raw;
+  resultEl.classList.add('show');
+  setStatus('QR detectado · esperando validación...','ok');
+
+  sendToParent({
+    type:'AJO_QR_DETECTED',
+    raw:raw,
+    timestamp:Date.now()
+  });
+}
+
+function reanudarEscaneo(){
+  if(!scanner || !running) return;
+
+  try {
+    scanner.resume();
+    paused = false;
+    setStatus('Cámara activa · Escaneando...');
+  } catch(e) {
+    paused = false;
+    setStatus('No se pudo reanudar automáticamente. Pulsa Activar cámara.','err');
+  }
+}
+
+startBtn.addEventListener('click', iniciarCamara);
+stopBtn.addEventListener('click', detenerCamara);
+
+window.addEventListener('load', function(){
+  sendToParent({type:'AJO_SCANNER_READY'});
+  // Intento automático; si el navegador exige interacción, queda disponible el botón.
+  setTimeout(iniciarCamara, 250);
+});
+</script>
+</body>
+</html>
