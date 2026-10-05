@@ -1,1 +1,257 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Cámara - Portal Alianza</title>
+  <style>
+    :root{
+      --primary:#0D47A1;
+      --primary2:#1976D2;
+      --bg:#f5f7fb;
+      --text:#172033;
+      --muted:#6f7b8f;
+      --border:#dfe6f0;
+      --danger:#dc3545;
+      --shadow:0 18px 45px rgba(13,71,161,.12);
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--text)}
+    body{display:flex;justify-content:center;padding:18px}
+    .card{width:min(720px,100%);background:#fff;border:1px solid var(--border);border-radius:24px;padding:18px;box-shadow:var(--shadow)}
+    .brand{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+    .brand img{width:52px;height:52px;object-fit:contain}
+    .brand strong{display:block;font-size:16px}
+    .brand span{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+    .status{padding:11px 13px;border-radius:12px;background:#f3f6fb;color:#526076;font-size:13px;margin-bottom:12px}
+    .status.ok{background:#e8f7ef;color:#157347}
+    .status.err{background:#fdebee;color:#b02a37}
+    .camera-wrap{position:relative;width:100%;aspect-ratio:1/1;border-radius:20px;overflow:hidden;background:#0d1117;border:1px solid #1e2630}
+    #video{width:100%;height:100%;display:block;object-fit:cover;background:#0d1117}
+    .guide{position:absolute;inset:0;border:2px solid rgba(255,255,255,.88);border-radius:20px;pointer-events:none;box-shadow:inset 0 0 0 9999px rgba(0,0,0,.08)}
+    .actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:12px}
+    button,select{border-radius:12px;padding:11px 14px;font-weight:700;font-size:14px}
+    button{border:0;cursor:pointer}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    .primary{background:linear-gradient(135deg,var(--primary),var(--primary2));color:#fff}
+    .soft{background:#fff;border:1px solid var(--border);color:#445168}
+    .field{margin-top:12px}
+    .field label{display:block;font-size:12px;font-weight:800;margin-bottom:6px}
+    select{width:100%;border:1px solid var(--border);background:#fff;color:var(--text)}
+    .hint{margin-top:10px;font-size:11px;color:var(--muted);line-height:1.5}
+    .fallback{margin-top:12px;text-align:center}
+    .fallback button{font-size:12px;padding:8px 11px}
+    @media(max-width:560px){.actions{grid-template-columns:1fr}.card{padding:13px;border-radius:18px}body{padding:9px}}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand">
+      <img src="https://lh3.googleusercontent.com/d/1J6oQPgqHqA8twwhnhuClNdHh8evDHJct" alt="Alianza">
+      <div>
+        <strong>Tomar fotografía</strong>
+        <span>Portal Alianza</span>
+      </div>
+    </div>
 
+    <div id="status" class="status">Preparando cámara...</div>
+
+    <div class="camera-wrap">
+      <video id="video" autoplay playsinline muted></video>
+      <div class="guide"></div>
+    </div>
+
+    <div class="field">
+      <label for="cameraSelect">Cámara</label>
+      <select id="cameraSelect">
+        <option value="">Cámara predeterminada</option>
+      </select>
+    </div>
+
+    <div class="actions">
+      <button id="captureBtn" type="button" class="primary" disabled>📷 Capturar foto</button>
+      <button id="switchBtn" type="button" class="soft">↻ Cambiar cámara</button>
+    </div>
+
+    <div class="fallback">
+      <button id="nativeBtn" type="button" class="soft">Usar cámara del dispositivo</button>
+      <input id="nativeInput" type="file" accept="image/*" capture="user" hidden>
+    </div>
+
+    <div class="hint">
+      Puedes seleccionar cualquier cámara que el navegador detecte, incluida una webcam USB o un dispositivo externo. La fotografía no se almacena en GitHub; solo se devuelve al Portal Alianza para su edición y guardado.
+    </div>
+  </main>
+
+<script>
+'use strict';
+
+const video = document.getElementById('video');
+const statusEl = document.getElementById('status');
+const cameraSelect = document.getElementById('cameraSelect');
+const captureBtn = document.getElementById('captureBtn');
+const switchBtn = document.getElementById('switchBtn');
+const nativeBtn = document.getElementById('nativeBtn');
+const nativeInput = document.getElementById('nativeInput');
+
+let stream = null;
+let devices = [];
+let contexto = new URLSearchParams(window.location.search).get('contexto') || 'expediente';
+let preferFront = true;
+
+function setStatus(message,type){
+  statusEl.textContent=message;
+  statusEl.className='status'+(type?' '+type:'');
+}
+
+function enviarFoto(dataUrl){
+  if(!dataUrl)return;
+  const message={
+    type:'AJO_FOTO_CAPTURED',
+    dataUrl:dataUrl,
+    contexto:contexto,
+    timestamp:Date.now()
+  };
+  try{
+    if(window.opener && !window.opener.closed){
+      window.opener.postMessage(message,'*');
+      setStatus('Fotografía enviada al Portal Alianza.','ok');
+      setTimeout(function(){window.close();},180);
+      return;
+    }
+    if(window.parent && window.parent!==window){
+      window.parent.postMessage(message,'*');
+      setStatus('Fotografía enviada al Portal Alianza.','ok');
+      return;
+    }
+  }catch(e){}
+  setStatus('No fue posible devolver la fotografía al Portal. Puedes cerrar esta ventana e intentarlo nuevamente.','err');
+}
+
+function detenerStream(){
+  if(stream){
+    stream.getTracks().forEach(function(track){try{track.stop();}catch(e){}});
+    stream=null;
+  }
+  video.srcObject=null;
+  captureBtn.disabled=true;
+}
+
+async function listarCamaras(){
+  try{
+    const all=await navigator.mediaDevices.enumerateDevices();
+    devices=all.filter(function(d){return d.kind==='videoinput';});
+    const current=cameraSelect.value;
+    cameraSelect.innerHTML='';
+    const def=document.createElement('option');
+    def.value='';
+    def.textContent='Cámara predeterminada';
+    cameraSelect.appendChild(def);
+    devices.forEach(function(device,index){
+      const opt=document.createElement('option');
+      opt.value=device.deviceId;
+      opt.textContent=device.label || ('Cámara '+(index+1));
+      cameraSelect.appendChild(opt);
+    });
+    if(current && devices.some(function(d){return d.deviceId===current;}))cameraSelect.value=current;
+  }catch(err){}
+}
+
+async function iniciarCamara(deviceId){
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    setStatus('Este navegador no permite acceso directo a la cámara.','err');
+    return;
+  }
+
+  detenerStream();
+  setStatus('Solicitando permiso de cámara...');
+
+  const constraints={
+    audio:false,
+    video:deviceId
+      ? {deviceId:{exact:deviceId},width:{ideal:1280},height:{ideal:1280}}
+      : {facingMode:{ideal:preferFront?'user':'environment'},width:{ideal:1280},height:{ideal:1280}}
+  };
+
+  try{
+    stream=await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject=stream;
+    await video.play();
+    await listarCamaras();
+    if(deviceId)cameraSelect.value=deviceId;
+    captureBtn.disabled=false;
+    setStatus('Cámara activa. Ajusta el encuadre y captura la fotografía.','ok');
+  }catch(err){
+    setStatus('No fue posible activar la cámara: '+((err&&err.message)||String(err)),'err');
+    captureBtn.disabled=true;
+  }
+}
+
+function capturar(){
+  if(!stream || !video.videoWidth || !video.videoHeight){
+    setStatus('La cámara todavía no está lista.','err');
+    return;
+  }
+
+  const side=Math.min(video.videoWidth,video.videoHeight);
+  const sx=Math.round((video.videoWidth-side)/2);
+  const sy=Math.round((video.videoHeight-side)/2);
+  const out=1200;
+  const canvas=document.createElement('canvas');
+  canvas.width=out;
+  canvas.height=out;
+  const ctx=canvas.getContext('2d');
+  ctx.imageSmoothingEnabled=true;
+  ctx.imageSmoothingQuality='high';
+  ctx.drawImage(video,sx,sy,side,side,0,0,out,out);
+  enviarFoto(canvas.toDataURL('image/jpeg',0.9));
+}
+
+cameraSelect.addEventListener('change',function(){
+  const id=this.value;
+  iniciarCamara(id||null);
+});
+
+switchBtn.addEventListener('click',function(){
+  if(devices.length>1){
+    const current=cameraSelect.value;
+    const idx=devices.findIndex(function(d){return d.deviceId===current;});
+    const next=devices[(idx+1+devices.length)%devices.length];
+    if(next){
+      cameraSelect.value=next.deviceId;
+      iniciarCamara(next.deviceId);
+      return;
+    }
+  }
+  preferFront=!preferFront;
+  iniciarCamara(null);
+});
+
+captureBtn.addEventListener('click',capturar);
+
+nativeBtn.addEventListener('click',function(){nativeInput.click();});
+nativeInput.addEventListener('change',function(e){
+  const file=e.target.files?.[0];
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=function(){enviarFoto(reader.result);};
+  reader.readAsDataURL(file);
+  e.target.value='';
+});
+
+window.addEventListener('beforeunload',detenerStream);
+
+window.addEventListener('load',function(){
+  if(!window.isSecureContext){
+    setStatus('Esta página necesita HTTPS para usar la cámara.','err');
+    return;
+  }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    setStatus('El navegador no expone la API de cámara. Usa la opción de cámara del dispositivo.','err');
+    return;
+  }
+  iniciarCamara(null);
+});
+</script>
+</body>
+</html>
